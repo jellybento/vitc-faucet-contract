@@ -1,0 +1,116 @@
+pragma soliditypp ^0.4.3;
+ 
+contract Faucet {
+ 
+    // faucet parameters
+    uint constant MAX_CALLS_PER_PERIOD = 10;  // 100*24*10 = 24000/day maximum output, 12000/day at low output.
+    uint constant RESET_PERIOD = 3600;        // 1 hour.
+    uint constant ADDRESS_DELAY = 82800;      // 23 hours, allowing for daily same-time requests.
+    uint constant HIGH_REWARD = 100e18;
+    uint constant HIGH_REWARD_THRESHOLD = 100e18;
+    bool constant ENABLE_LOW_REWARD = true;
+    uint constant LOW_REWARD = 50e18;
+    tokenId constant VITE_ID = tokenId("tti_5649544520544f4b454e6e40");
+    tokenId constant VITC_ID = tokenId("tti_22d0b205bed4d268a05dfc3c");
+ 
+    // events
+    event Dispensed(address addr, uint amount);
+    event Funded(address addr, uint amount);
+ 
+    // variables
+    uint callsSinceReset;
+    uint lastResetTime;
+    mapping(address => uint) public lastCallTime;
+ 
+    // internal functions 
+        
+    constructor() public {
+    }
+ 
+    function _enforceGlobalRateLimit() private {
+        if(block.timestamp > lastResetTime + RESET_PERIOD){
+            lastResetTime = block.timestamp;
+            callsSinceReset = 0;
+        }
+        require(callsSinceReset < MAX_CALLS_PER_PERIOD);
+        callsSinceReset += 1;
+    }
+ 
+    function _enforceAddressRateLimit(address addr) private {
+        require(block.timestamp > lastCallTime[addr] + ADDRESS_DELAY );
+        lastCallTime[addr] = block.timestamp;
+    }
+ 
+    function _sendReward(address addr) private {
+        if (msg.amount >= HIGH_REWARD_THRESHOLD) {
+            addr.transfer(VITC_ID, HIGH_REWARD);        
+            emit Dispensed(addr,HIGH_REWARD);
+        } else if (ENABLE_LOW_REWARD) {
+            addr.transfer(VITC_ID, LOW_REWARD);        
+            emit Dispensed(addr,LOW_REWARD);
+        } else {
+            revert("Transaction did not send enough funds.");
+        }
+    }
+ 
+    function _fund() private {
+        // only allow funding of VITC, reimburse other tokens.
+        require(msg.tokenid == VITC_ID);
+        emit Funded(msg.sender,msg.amount);
+    }
+ 
+    function _dispense(address addr) private {
+        // only dispense if user sends VITE. Sending 0 VITE is still accepted.
+        require(msg.tokenid == VITE_ID);
+        
+        // reimburse funds to sender no matter what
+        msg.sender.transfer(msg.tokenid, msg.amount); 
+ 
+        _enforceGlobalRateLimit();
+        _enforceAddressRateLimit(addr);
+ 
+        _sendReward(addr);
+    }
+ 
+    // public interface
+ 
+    onMessage fund() payable {
+        _fund();
+    }
+ 
+    onMessage dispense(address addr) payable {
+        _dispense(addr);
+    }
+ 
+    onMessage() payable {
+        if (msg.tokenid == VITC_ID) {
+            // all VITC sent to the contract are locked in the faucet as funding.
+            _fund();
+        } else if(msg.tokenid == VITE_ID){
+            // all VITE sent to the contract are automatically reimbursed in _dispense along with a reward to the sender.
+            _dispense(msg.sender);
+        } else {
+            // any other token sent to the contract are automatically reimbursed.
+            revert("Unsupported token.");
+        }
+    }
+    
+    // getters
+ 
+    getter getCallsSinceReset() returns(uint ncalls) {
+        return callsSinceReset;
+    }
+ 
+    getter getAddressResetTime(address addr) returns(uint t) {
+        return lastCallTime[addr] + ADDRESS_DELAY;
+    }
+ 
+    getter getGlobalResetTime() returns(uint treset_global) {
+        if(callsSinceReset < MAX_CALLS_PER_PERIOD) {
+            return 0;
+        } else {
+            return lastResetTime + RESET_PERIOD;
+        }
+    }    
+ 
+}
